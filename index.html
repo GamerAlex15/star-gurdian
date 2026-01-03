@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Star Guardian</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #050505;
+            color: #fff;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            overflow: hidden;
+            touch-action: none;
+        }
+        canvas {
+            display: block;
+            image-rendering: pixelated;
+        }
+        #ui-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 10;
+        }
+        .hud {
+            position: absolute;
+            top: 10px;
+            width: 100%;
+            padding: 0 20px;
+            display: flex;
+            justify-content: space-between;
+            pointer-events: none;
+            font-family: 'Courier New', Courier, monospace;
+            font-weight: bold;
+            font-size: 1.2rem;
+            color: #00ffcc;
+            text-shadow: 0 0 10px rgba(0, 255, 204, 0.5);
+        }
+        .btn {
+            pointer-events: auto;
+            background: rgba(0, 255, 204, 0.2);
+            border: 2px solid #00ffcc;
+            color: #00ffcc;
+            padding: 15px 30px;
+            font-size: 1.5rem;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+        }
+        .btn:active {
+            background: #00ffcc;
+            color: #000;
+            transform: scale(0.95);
+        }
+        #touch-controls {
+            position: absolute;
+            bottom: 30px;
+            width: 100%;
+            display: flex;
+            justify-content: space-around;
+            pointer-events: none;
+        }
+        .touch-zone {
+            pointer-events: auto;
+            width: 80px;
+            height: 80px;
+            background: rgba(255, 255, 255, 0.1);
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            user-select: none;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="hud">
+        <div>SCORE: <span id="score">0</span></div>
+        <div>LIVES: <span id="lives">3</span></div>
+    </div>
+
+    <div id="ui-overlay">
+        <div id="start-screen" class="text-center">
+            <h1 class="text-5xl font-black mb-6 text-cyan-400 italic">STAR GUARDIAN</h1>
+            <p class="mb-8 text-gray-400">TOUCH OR ARROW KEYS TO MOVE<br>AUTOMATIC FIRE ENABLED</p>
+            <button class="btn" onclick="startGame()">Start Mission</button>
+        </div>
+        <div id="game-over" class="hidden text-center">
+            <h2 class="text-6xl font-black mb-4 text-red-500">MISSION FAILED</h2>
+            <p id="final-score" class="text-2xl mb-8 text-white"></p>
+            <button class="btn" onclick="startGame()">Try Again</button>
+        </div>
+    </div>
+
+    <canvas id="gameCanvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreEl = document.getElementById('score');
+        const livesEl = document.getElementById('lives');
+        const startScreen = document.getElementById('start-screen');
+        const gameOverScreen = document.getElementById('game-over');
+        const finalScoreEl = document.getElementById('final-score');
+
+        let gameState = 'START';
+        let score = 0;
+        let lives = 3;
+        let player, invaders, projectiles, particles, stars;
+        let animationId;
+        let lastTime = 0;
+        let invaderDirection = 1;
+        let invaderStepDown = false;
+        let fireTimer = 0;
+
+        // Configuration
+        const INVADER_ROWS = 4;
+        const INVADER_COLS = 8;
+        const PLAYER_SPEED = 7;
+        const INVADER_SPEED_BASE = 1;
+        const FIRE_RATE = 400; // ms
+
+        // Responsive Resizing
+        function resize() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            if (player) player.y = canvas.height - 80;
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        // Assets (SVGs drawn to offscreen canvas)
+        const sprites = {
+            player: createSVGPath('M15 0 L30 30 L15 25 L0 30 Z', '#00ffcc'),
+            invader1: createSVGPath('M5 5 L25 5 L30 15 L25 25 L5 25 L0 15 Z M8 12 H12 M18 12 H22', '#ff3366'),
+            invader2: createSVGPath('M0 0 H30 V30 H0 Z M5 10 H10 M20 10 H25 M10 20 H20', '#ff9900')
+        };
+
+        function createSVGPath(d, color) {
+            const tempCanvas = document.createElement('canvas');
+            tempCanvas.width = 30;
+            tempCanvas.height = 30;
+            const tCtx = tempCanvas.getContext('2d');
+            tCtx.fillStyle = color;
+            const p = new Path2D(d);
+            tCtx.fill(p);
+            return tempCanvas;
+        }
+
+        // Input Handling
+        const keys = {};
+        window.addEventListener('keydown', e => keys[e.code] = true);
+        window.addEventListener('keyup', e => keys[e.code] = false);
+
+        // Touch Interaction
+        let touchX = null;
+        canvas.addEventListener('touchstart', e => {
+            touchX = e.touches[0].clientX;
+        });
+        canvas.addEventListener('touchmove', e => {
+            e.preventDefault();
+            touchX = e.touches[0].clientX;
+        }, { passive: false });
+        canvas.addEventListener('touchend', () => {
+            touchX = null;
+        });
+
+        class Player {
+            constructor() {
+                this.width = 40;
+                this.height = 40;
+                this.x = canvas.width / 2 - this.width / 2;
+                this.y = canvas.height - 100;
+                this.speed = PLAYER_SPEED;
+            }
+            update() {
+                // Keyboard
+                if (keys['ArrowLeft'] && this.x > 0) this.x -= this.speed;
+                if (keys['ArrowRight'] && this.x < canvas.width - this.width) this.x += this.speed;
+
+                // Touch
+                if (touchX !== null) {
+                    const targetX = touchX - this.width / 2;
+                    const diff = targetX - this.x;
+                    this.x += diff * 0.2; // Smooth tracking
+                }
+
+                // Fire
+                fireTimer -= 16.6; 
+                if (fireTimer <= 0 && gameState === 'PLAYING') {
+                    projectiles.push(new Projectile(this.x + this.width / 2, this.y, -1, '#00ffcc'));
+                    fireTimer = FIRE_RATE;
+                }
+            }
+            draw() {
+                ctx.drawImage(sprites.player, this.x, this.y, this.width, this.height);
+                // Engine glow
+                ctx.shadowBlur = 15;
+                ctx.shadowColor = '#00ffcc';
+                ctx.fillStyle = '#00ffcc';
+                ctx.fillRect(this.x + 15, this.y + 35, 10, 5);
+                ctx.shadowBlur = 0;
+            }
+        }
+
+        class Invader {
+            constructor(x, y, type) {
+                this.x = x;
+                this.y = y;
+                this.width = 35;
+                this.height = 35;
+                this.type = type;
+                this.sprite = type === 0 ? sprites.invader1 : sprites.invader2;
+            }
+            update(dx, dy) {
+                this.x += dx;
+                this.y += dy;
+            }
+            draw() {
+                ctx.drawImage(this.sprite, this.x, this.y, this.width, this.height);
+            }
+        }
+
+        class Projectile {
+            constructor(x, y, dir, color) {
+                this.x = x - 2;
+                this.y = y;
+                this.dir = dir;
+                this.speed = 8;
+                this.width = 4;
+                this.height = 15;
+                this.color = color;
+            }
+            update() {
+                this.y += this.speed * this.dir;
+            }
+            draw() {
+                ctx.fillStyle = this.color;
+                ctx.fillRect(this.x, this.y, this.width, this.height);
+            }
+        }
+
+        class Particle {
+            constructor(x, y, color) {
+                this.x = x;
+                this.y = y;
+                this.vx = (Math.random() - 0.5) * 6;
+                this.vy = (Math.random() - 0.5) * 6;
+                this.life = 1.0;
+                this.color = color;
+            }
+            update() {
+                this.x += this.vx;
+                this.y += this.vy;
+                this.life -= 0.02;
+            }
+            draw() {
+                ctx.globalAlpha = this.life;
+                ctx.fillStyle = this.color;
+                ctx.fillRect(this.x, this.y, 3, 3);
+                ctx.globalAlpha = 1.0;
+            }
+        }
+
+        function spawnInvaders() {
+            invaders = [];
+            const padding = 50;
+            const gridW = (INVADER_COLS * (35 + padding)) - padding;
+            const startX = (canvas.width - gridW) / 2;
+
+            for (let r = 0; r < INVADER_ROWS; r++) {
+                for (let c = 0; c < INVADER_COLS; c++) {
+                    invaders.push(new Invader(
+                        startX + c * (35 + padding),
+                        80 + r * (35 + 30),
+                        r % 2
+                    ));
+                }
+            }
+        }
+
+        function startGame() {
+            gameState = 'PLAYING';
+            score = 0;
+            lives = 3;
+            scoreEl.textContent = score;
+            livesEl.textContent = lives;
+            startScreen.classList.add('hidden');
+            gameOverScreen.classList.add('hidden');
+            
+            player = new Player();
+            projectiles = [];
+            particles = [];
+            stars = Array.from({length: 100}, () => ({
+                x: Math.random() * canvas.width,
+                y: Math.random() * canvas.height,
+                s: Math.random() * 2
+            }));
+            
+            spawnInvaders();
+            if (animationId) cancelAnimationFrame(animationId);
+            gameLoop();
+        }
+
+        function createExplosion(x, y, color) {
+            for (let i = 0; i < 15; i++) {
+                particles.push(new Particle(x, y, color));
+            }
+        }
+
+        function gameLoop() {
+            if (gameState !== 'PLAYING') return;
+
+            ctx.fillStyle = '#050505';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Background Stars
+            ctx.fillStyle = '#fff';
+            stars.forEach(s => {
+                s.y += s.s;
+                if (s.y > canvas.height) s.y = 0;
+                ctx.fillRect(s.x, s.y, s.s, s.s);
+            });
+
+            // Update Player
+            player.update();
+            player.draw();
+
+            // Update Invaders
+            let edgeReached = false;
+            let currentSpeed = INVADER_SPEED_BASE + (score / 2000);
+            
+            invaders.forEach(inv => {
+                inv.update(invaderDirection * currentSpeed, 0);
+                if (inv.x + inv.width > canvas.width - 20 || inv.x < 20) edgeReached = true;
+                inv.draw();
+
+                // Check collision with player
+                if (inv.y + inv.height > player.y && 
+                    inv.x < player.x + player.width && 
+                    inv.x + inv.width > player.x) {
+                    endGame();
+                }
+                
+                // Random invader fire
+                if (Math.random() < 0.001) {
+                    projectiles.push(new Projectile(inv.x + inv.width/2, inv.y + inv.height, 1, '#ff3366'));
+                }
+            });
+
+            if (edgeReached) {
+                invaderDirection *= -1;
+                invaders.forEach(inv => inv.y += 20);
+            }
+
+            // Projectiles
+            projectiles.forEach((p, pIdx) => {
+                p.update();
+                p.draw();
+
+                // Player laser vs Invaders
+                if (p.dir === -1) {
+                    invaders.forEach((inv, iIdx) => {
+                        if (p.x < inv.x + inv.width && p.x + p.width > inv.x &&
+                            p.y < inv.y + inv.height && p.y + p.height > inv.y) {
+                            createExplosion(inv.x + inv.width/2, inv.y + inv.height/2, '#ff3366');
+                            invaders.splice(iIdx, 1);
+                            projectiles.splice(pIdx, 1);
+                            score += 100;
+                            scoreEl.textContent = score;
+                            if (invaders.length === 0) spawnInvaders();
+                        }
+                    });
+                } else {
+                    // Enemy laser vs Player
+                    if (p.x < player.x + player.width && p.x + p.width > player.x &&
+                        p.y < player.y + player.height && p.y + p.height > player.y) {
+                        projectiles.splice(pIdx, 1);
+                        lives--;
+                        livesEl.textContent = lives;
+                        createExplosion(player.x + player.width/2, player.y + player.height/2, '#00ffcc');
+                        if (lives <= 0) endGame();
+                    }
+                }
+
+                if (p.y < 0 || p.y > canvas.height) projectiles.splice(pIdx, 1);
+            });
+
+            // Particles
+            particles.forEach((p, idx) => {
+                p.update();
+                p.draw();
+                if (p.life <= 0) particles.splice(idx, 1);
+            });
+
+            animationId = requestAnimationFrame(gameLoop);
+        }
+
+        function endGame() {
+            gameState = 'GAMEOVER';
+            gameOverScreen.classList.remove('hidden');
+            finalScoreEl.textContent = `FINAL SCORE: ${score}`;
+        }
+
+    </script>
+</body>
+</html>
